@@ -33,7 +33,7 @@ You will typically receive a response within one week of submitting your request
 
 1. **Clone the repository**:
    ```python
-   git clone <https://github.com/TaoMedAI/RareSeek-R1>
+   git clone <https://github.com/mulinlab/RareSeek-R1>
    ```
   
 2. **Create conda environment**:
