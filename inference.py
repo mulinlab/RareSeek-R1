@@ -18,7 +18,7 @@ file_path = "sample_data/sample.jsonl"  # Path to your jsonl file
 data = load_data(file_path)
 
 # Create sampling parameters for controlling the model output
-sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+sampling_params = SamplingParams(temperature=0.1, top_p=0.95)
 
 # Specify the model path (replace with local path if downloaded)
 # If you have the model downloaded, replace "TaoMedAI/RareSeek-R1" with the local path to the model directory
