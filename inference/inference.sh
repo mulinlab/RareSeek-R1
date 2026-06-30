@@ -16,7 +16,7 @@ echo "=== Job started at $(date) on $(hostname) ==="
 
 vllm serve TaoMedAI/model/RareSeek-R1 \
 	--host 0.0.0.0 \
-	--port 8001 \
-	--max_model_len 2048 \
+	--port 8000 \
+	--max_model_len 4096 \
     --tensor-parallel-size 4 \
-	--gpu_memory_utilization 0.93
+	--gpu_memory_utilization 0.95
