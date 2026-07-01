@@ -1,0 +1,48 @@
+analysis:
+    genomeAssembly: hg38
+    vcf: {vcf_path}
+    hpoIds: {hpo_ids}
+    inheritanceModes: {
+            AUTOSOMAL_DOMINANT: 0.1,
+            AUTOSOMAL_RECESSIVE_HOM_ALT: 0.1,
+            AUTOSOMAL_RECESSIVE_COMP_HET: 2.0,
+            X_DOMINANT: 0.1,
+            X_RECESSIVE_HOM_ALT: 0.1,
+            X_RECESSIVE_COMP_HET: 2.0,
+            MITOCHONDRIAL: 0.2
+    }
+    analysisMode: FULL
+    frequencySources: [
+        UK10K,GNOMAD_E_AFR, GNOMAD_E_AMR,
+        GNOMAD_E_ASJ, GNOMAD_E_EAS, GNOMAD_E_FIN,
+        GNOMAD_E_NFE, GNOMAD_E_OTH, GNOMAD_E_SAS,
+        GNOMAD_G_AFR, GNOMAD_G_AMR, GNOMAD_G_ASJ,
+        GNOMAD_G_EAS, GNOMAD_G_FIN, GNOMAD_G_NFE,
+        GNOMAD_G_OTH, GNOMAD_G_SAS
+    ]
+    pathogenicitySources: [ REVEL, MVP, REMM, CADD, SPLICE_AI, ALPHA_MISSENSE ]
+    steps: [
+        failedVariantFilter: { },
+        variantEffectFilter: {
+          remove: [
+              FIVE_PRIME_UTR_EXON_VARIANT,
+              FIVE_PRIME_UTR_INTRON_VARIANT,
+              THREE_PRIME_UTR_EXON_VARIANT,
+              THREE_PRIME_UTR_INTRON_VARIANT,
+              NON_CODING_TRANSCRIPT_EXON_VARIANT,
+              UPSTREAM_GENE_VARIANT,
+              INTERGENIC_VARIANT,
+                REGULATORY_REGION_VARIANT,
+                CODING_TRANSCRIPT_INTRON_VARIANT,
+                NON_CODING_TRANSCRIPT_INTRON_VARIANT,
+                DOWNSTREAM_GENE_VARIANT
+            ]
+        },
+        frequencyFilter: {maxFrequency: 2.0},
+        pathogenicityFilter: {keepNonPathogenic: true},
+        inheritanceFilter: {},
+        omimPrioritiser: {},
+        hiPhivePrioritiser: {},
+    ]
+outputOptions:
+    outputFormats: [HTML, TSV_GENE, TSV_VARIANT]
