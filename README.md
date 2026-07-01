@@ -4,7 +4,7 @@
 
 For an overview of this study, see the figure below.
 
-![Fig1](https://github.com/mulinlab/RareSeek-R1/blob/main/RareSeek-R1.svg)
+![Fig1](https://github.com/mulinlab/RareSeek-R1/blob/main/RareSeek-R1.png)
 
 ## Requirements
 ### Hardware
