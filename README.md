@@ -52,7 +52,7 @@ The open-source data underpinning this study, including training datasets and su
 **Dependencies:**
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/TaoMedAI/RareSeek-R1.git](https://github.com/TaoMedAI/RareSeek-R1.git)
+   git clone https://github.com/TaoMedAI/RareSeek-R1.git
    cd RareSeek-R1
    ```
 2. Create and activate a Conda environment:
