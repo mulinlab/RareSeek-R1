@@ -140,7 +140,7 @@ def build_prompt(context):
 data = load_data("sample_data/sample.jsonl")
 
 # 2. Configure sampling parameters
-sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+sampling_params = SamplingParams(temperature=0.1, top_p=0.95)
 
 # 3. Initialize vLLM (Replace with local path "models/RareSeek-R1" if downloaded)
 llm = LLM(model="TaoMedAI/RareSeek-R1") 
