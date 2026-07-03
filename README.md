@@ -67,7 +67,7 @@ The open-source data underpinning this study, including training datasets and su
 
 ### Model Weights
 
-The pretrained weights of **RareSeek-R1** can be accessed upon request via [HuggingFace (TaoMedAI/RareSeek-R1)](https://huggingface.co/TaoMedAI/RareSeek-R1) for non-commercial research and academic use. 
+The model weights of **RareSeek-R1** can be accessed upon request via [HuggingFace (TaoMedAI/RareSeek-R1)](https://huggingface.co/TaoMedAI/RareSeek-R1) for non-commercial research and academic use. 
 
 > **Note:** Once access is granted, please download the model weights and place them in the `models/` directory. You will typically receive a response within one week of submitting your request. If you do not hear back in a timely manner, please contact the corresponding author.
 
