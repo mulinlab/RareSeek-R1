@@ -33,12 +33,12 @@ The model is first instruction-tuned on the clinically grounded **RareMed-Corpus
 ## 📊 Data Availability
 
 The open-source data underpinning this study, including training datasets and supplementary knowledge graph components, are publicly available.
-> **Directory Setup:** Once downloaded, please ensure all the respective data files are placed into the `RareMed-KG/data/raw` directory path for seamless integration with the subsequent pipeline.
+
 - **RareMedData (Training Data & General KG)**: Available at [HuggingFace: TaoMedAI/RareMedData](https://huggingface.co/datasets/TaoMedAI/RareMedData).
 - **Knowledge Graph Genetic Variation Data**:
   - **ClinVar**: Download the GRCh38 VCF release (2025.02.09) from the [NCBI FTP server](https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/).
   - **HGMD**: Human Gene Mutation Database (2024.02 version) can be accessed via [HGMD](https://www.hgmd.cf.ac.uk/ac/index.php).
-
+> **Data Organization:** We suggest organizing all downloaded data files within the `RareMed-KG/data/raw` directory.
 ---
 
 ## 🚀 Getting Started
