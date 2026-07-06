@@ -23,7 +23,7 @@ The model is first instruction-tuned on the clinically grounded **RareMed-Corpus
   - [1. EHR Preprocessing](#1-ehr-preprocessing)
   - [2. Phenotype Extraction](#2-phenotype-extraction-baselines--llms)
   - [3. Model Inference (Standard)](#3-model-inference-standard)
-  - [4. RareMedRAG)](#4-raremedkg-augmented-inference-kg-rag)
+  - [4. RareMedRAG](#4-raremedkg-augmented-inference-kg-rag)
   - [5. Post-processing & Normalization](#5-post-processing--normalization)
   - [6. Evaluation](#6-evaluation)
 - [License & Contact](#-license--contact)
