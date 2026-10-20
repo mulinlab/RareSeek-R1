@@ -1,0 +1,4 @@
+# Optional external GeneBe adapter; live account/schema validation still required.
+-r kg.txt
+genebe==0.2.10
+tqdm==4.67.1
