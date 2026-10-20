@@ -1,3 +1,8 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from rareseek.legacy_paths import RAW, PROCESSED, INTEGRATION, integration_dir
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -14,7 +19,7 @@ import re
 from typing import List
 
 # ==================== Configuration ====================
-INPUT_VCF_GZ     = "clinvar_20250209.vcf.gz"
+INPUT_VCF_GZ     = RAW / "clinvar_20250209.vcf.gz"
 OUTPUT_PREFIX    = "clinvar_20250209.vcf.pathogenic_or_likely_pathogenic"
 CHROMS           = [str(i) for i in range(1, 23)] + ["X", "Y", "MT"]
 
@@ -23,7 +28,7 @@ UNWANTED_KEYWORD       = "conflicting"
 
 # Final desired header (based on the order in your original script)
 FINAL_HEADER = [
-    "chrom", "pos", "ref", "alt", "qual", "filter",
+    "chrom", "pos", "ref", "alt", "qual", "filter", "variation_id",
     "af_esp", "af_exac", "af_tgp",
     "alleleid", "clndids", "clndn", "clnhgvs", "clnrevstat",
     "clnsig", "clnsigscv", "clnvc", "clnvcso", "clnvi",
@@ -70,7 +75,7 @@ def read_clinvar_vcf_gz(file_path: str):
                 "INFO": info
             }
             data.append(row)
-    return pd.DataFrame(data)
+    return pd.DataFrame(data, columns=['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO'])
 
 
 def extract_info_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -88,7 +93,7 @@ def extract_info_columns(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {
         "#chrom": "chrom",
         "pos":    "pos",
-        "id":     "rs",
+        "id":     "variation_id",
         "ref":    "ref",
         "alt":    "alt",
         "qual":   "qual",
@@ -147,6 +152,8 @@ def is_pathogenic(row) -> bool:
     if not clnsigincl:
         return False
 
+    if contains_unwanted(clnsigincl):
+        return False
     for part in clnsigincl.split("|"):
         part = part.strip()
         if ":" not in part:
@@ -165,6 +172,8 @@ def is_pathogenic(row) -> bool:
 def main():
     print("Reading ClinVar file...")
     df = read_clinvar_vcf_gz(INPUT_VCF_GZ)
+    if df.empty:
+        raise ValueError('ClinVar VCF contains no variant records')
 
     print("Expanding INFO field...")
     df = extract_info_columns(df)
@@ -180,15 +189,11 @@ def main():
     df_path = df_path.sort_values(["chrom", "pos"])
 
     # Split by chromosome and save
-    out_dir = Path("clinvar_split")
+    out_dir = integration_dir() / "clinvar_split"
     out_dir.mkdir(exist_ok=True)
 
     for chrom in CHROMS:
         df_chr = df_path[df_path["chrom"] == chrom].copy()
-
-        if df_chr.empty:
-            print(f"chr{chrom}: No qualifying variants, skipping")
-            continue
 
         # Fill missing columns with empty string
         for col in FINAL_HEADER:

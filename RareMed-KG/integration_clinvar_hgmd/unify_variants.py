@@ -1,3 +1,8 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from rareseek.legacy_paths import RAW, PROCESSED, INTEGRATION, integration_dir
+
 """
 Variant Aggregation and Phenotype Annotation Pipeline
 
@@ -7,6 +12,8 @@ Phenotype Identifiers (PhenotypeIDS) by mapping genomic coordinates.
 """
 
 import logging
+import json
+from rareseek.variants import chromosome
 import pandas as pd
 from pathlib import Path
 from typing import Dict
@@ -35,7 +42,17 @@ def aggregate_variant_chunks(directory_path: Path, file_pattern: str) -> pd.Data
     Raises:
         FileNotFoundError: If no files matching the pattern are found.
     """
-    file_paths = list(directory_path.glob(file_pattern))
+    manifest = directory_path / 'chunks.json'
+    if manifest.is_file():
+        run = json.loads(manifest.read_text(encoding='utf-8'))
+        if run.get('status') != 'complete':
+            raise ValueError('Variant reconciliation did not complete')
+        names = run['files']
+        if not isinstance(names, list) or any(Path(n).name != n for n in names):
+            raise ValueError('Invalid variant chunk manifest')
+        file_paths = [directory_path / n for n in names]
+    else:
+        file_paths = sorted(directory_path.glob(file_pattern))
     
     if not file_paths:
         logger.error(f"No files matching '{file_pattern}' found in {directory_path}.")
@@ -44,7 +61,7 @@ def aggregate_variant_chunks(directory_path: Path, file_pattern: str) -> pd.Data
     logger.info(f"Identified {len(file_paths)} variant files. Initiating aggregation...")
     
     # Read and concatenate all files, coercing everything to string to prevent dtype mismatches
-    dataframes = [pd.read_csv(file, sep='\t', dtype=str) for file in file_paths]
+    dataframes = [pd.read_csv(file, sep='\t', dtype=str, keep_default_na=False) for file in file_paths]
     aggregated_df = pd.concat(dataframes, ignore_index=True)
     
     logger.info(f"Aggregation complete. Total variants loaded: {len(aggregated_df)}.")
@@ -67,7 +84,13 @@ def annotate_phenotype_ids(
         pd.DataFrame: The annotated DataFrame with an appended 'PhenotypeIDS' column.
     """
     logger.info(f"Loading ClinVar summary reference from {clinvar_summary_path}...")
-    clinvar_summary_df = pd.read_csv(clinvar_summary_path, sep="\t", dtype=str)
+    clinvar_summary_df = pd.read_csv(clinvar_summary_path, sep="\t", dtype=str, keep_default_na=False)
+
+    if "Assembly" not in clinvar_summary_df:
+        raise ValueError("ClinVar summary requires Assembly; refusing mixed genome assemblies")
+    clinvar_summary_df = clinvar_summary_df[clinvar_summary_df["Assembly"] == "GRCh38"].copy()
+    clinvar_summary_df['Chromosome'] = clinvar_summary_df['Chromosome'].map(chromosome)
+    aggregated_variants['chr'] = aggregated_variants['chr'].map(chromosome)
 
     # Construct the composite genomic key for the ClinVar reference dataset
     clinvar_summary_df["genomic_key"] = (
@@ -78,10 +101,11 @@ def annotate_phenotype_ids(
     )
     
     # Generate a mapping dictionary: {genomic_key: PhenotypeIDS}
-    genomic_key_to_phenotype_map: Dict[str, str] = clinvar_summary_df.set_index("genomic_key")["PhenotypeIDS"].to_dict()
+    genomic_key_to_phenotype_map: Dict[str, str] = clinvar_summary_df.groupby("genomic_key")["PhenotypeIDS"].agg(lambda values: ";".join(sorted({str(v) for v in values if pd.notna(v)}))).to_dict()
 
     # Initialize the target column with empty strings
-    aggregated_variants["PhenotypeIDS"] = ""
+    if 'PhenotypeIDS' not in aggregated_variants:
+        aggregated_variants['PhenotypeIDS'] = '' 
     
     # Isolate rows originating from ClinVar for targeted annotation
     clinvar_source_mask = aggregated_variants["source"] == "clinvar"
@@ -105,9 +129,9 @@ def annotate_phenotype_ids(
 def main() -> None:
     """Main execution block for the variant annotation pipeline."""
     # Define file paths
-    variant_directory = Path("variant")
-    clinvar_summary_file = Path("../clinvar/variant_summary.txt")
-    output_file = Path("merged_variants_with_phenotype.csv")
+    variant_directory = INTEGRATION / "variant"
+    clinvar_summary_file = RAW / "variant_summary.txt"
+    output_file = integration_dir() / "variants_HGMD_Clinvar.tsv"
 
     try:
         # Step 1: Aggregate data chunks
@@ -129,6 +153,7 @@ def main() -> None:
 
     except Exception as e:
         logger.error(f"Pipeline terminated unexpectedly due to an error: {e}")
+        raise
 
 
 if __name__ == "__main__":
