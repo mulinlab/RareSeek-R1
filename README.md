@@ -137,7 +137,7 @@ We benchmarked against [PhenoTagger](https://github.com/ncbi-nlp/PhenoTagger) an
 
 The output retains extraction details and stores positive mapped HPO IDs in `hpo_list`.
 
-### 3. Model Inference (Standard)
+### 3. Model Inference
 
 We use `vLLM` to accelerate standard inference. Clinical records and local weights can be supplied directly; phenotype extraction, reference labels and a knowledge graph are not prerequisites.
 
