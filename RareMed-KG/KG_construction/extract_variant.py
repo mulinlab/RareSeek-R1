@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from rareseek.legacy_paths import RAW, PROCESSED, INTEGRATION, integration_dir
+
+
 import csv
 import gzip
 import logging
 import pickle
+from rareseek.variants import variant_name, merge_annotations, coordinates
 import re
 from collections import OrderedDict
 from pathlib import Path
@@ -13,14 +20,12 @@ import numpy as np
 import pandas as pd
 
 
-BASE_DIR = Path("..data/raw")
-OUT_DIR = Path("../processed/variant")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+BASE_DIR = RAW
+OUT_DIR = PROCESSED / "variant"
 CACHE_DIR = OUT_DIR / "cache"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
 VARIANT_CACHE_PATH = CACHE_DIR / "variant_restructured.pkl.gz"
 
-VARIANT_CSV_FILE_PATH = BASE_DIR / "variants_HGMD_Clinvar.csv"
+VARIANT_CSV_FILE_PATH = INTEGRATION / "variants_HGMD_Clinvar.tsv"
 
 LOGGER = logging.getLogger("process_clinvar")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -77,7 +82,8 @@ def normalize_hpo_id(v) -> str:
     text = normalize_text(v)
     if not text:
         return ""
-    match = re.search(r"(HP:\d{7})", text.upper())
+    text = re.sub(r'^(?:Human_Phenotype_Ontology:|HPO:)', '', text, flags=re.I)
+    match = re.fullmatch(r"(HP:\d{7})", text.upper())
     if match:
         return match.group(1)
     if re.fullmatch(r"HP:\d{7}", text.upper()):
@@ -100,7 +106,7 @@ def normalize_reference_id(value) -> str:
     text = normalize_text(value)
     if not text:
         return ""
-    match = re.search(r"(?i)\b(ORPHA|ORPHANET|OMIM)\s*:\s*([A-Za-z0-9]+)", text)
+    match = re.fullmatch(r"(?i)(ORPHA|ORPHANET|OMIM)\s*:\s*([A-Za-z0-9]+)", text)
     if not match:
         return text
     prefix = match.group(1).upper()
@@ -131,118 +137,7 @@ def export_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[dict]):
     LOGGER.info("exported %s", path)
 
 
-def build_variant_name(row: pd.Series, fallback_index: int) -> str:
-    parts = [
-        normalize_text(row.get("consequence_transcript", "")),
-        normalize_text(row.get("consequence_hgvs_c", "")),
-        normalize_text(row.get("consequence_hgvs_p", "")),
-    ]
-    parts = [p for p in parts if p]
-    if parts:
-        return ":".join(parts)
-
-    chr_val = normalize_text(row.get("chr", ""))
-    pos_val = normalize_text(row.get("pos", ""))
-    ref_val = normalize_text(row.get("ref", ""))
-    alt_val = normalize_text(row.get("alt", ""))
-    if chr_val and pos_val and ref_val and alt_val:
-        return f"variant:{chr_val}:{pos_val}:{ref_val}>{alt_val}"
-    return f"variant_{fallback_index}"
-
-
-def load_variant_data():
-    LOGGER.info("loading variant data: %s", VARIANT_CSV_FILE_PATH)
-    df = pd.read_csv(VARIANT_CSV_FILE_PATH, sep="	", dtype=str, keep_default_na=False, encoding="utf-8")
-    LOGGER.info("variant rows: %s", len(df))
-
-    if "variant_name" not in df.columns:
-        df["variant_name"] = [build_variant_name(row, idx) for idx, (_, row) in enumerate(df.iterrows(), start=1)]
-
-    variant_nodes = OrderedDict()
-    variant_phenotype_rels = set()
-    variant_disease_rels = set()
-    gene_variant_rels = set()
-    gene_disease_rels = set()
-    gene_phenotype_rels = set()
-    phenotype_disease_rels = set()
-
-    for idx, (_, row) in enumerate(df.iterrows(), start=1):
-        variant_id = normalize_text(row.get("variant_name")) or build_variant_name(row, idx)
-        if not variant_id:
-            continue
-
-        variant_nodes[variant_id] = {
-            "Source": normalize_text(row.get("source", "")),
-            "chr": normalize_text(row.get("chr", "")),
-            "pos": normalize_text(row.get("pos", "")),
-            "ref": normalize_text(row.get("ref", "")),
-            "alt": normalize_text(row.get("alt", "")),
-            "consequence_effect": normalize_text(row.get("consequence_effect", "")),
-            "consequence_protein_id": normalize_text(row.get("consequence_protein_id", "")),
-            "dbsnp": normalize_text(row.get("dbsnp", "")),
-            "revel_score": normalize_text(row.get("revel_score", "")),
-            "revel_prediction": normalize_text(row.get("revel_prediction", "")),
-            "spliceai_max_score": normalize_text(row.get("spliceai_max_score", "")),
-            "spliceai_max_prediction": normalize_text(row.get("spliceai_max_prediction", "")),
-            "acmg_score": normalize_text(row.get("acmg_score", "")),
-            "acmg_classification": normalize_text(row.get("acmg_classification", "")),
-            "acmg_criteria": normalize_text(row.get("acmg_criteria", "")),
-            "clinvar_classification": normalize_text(row.get("clinvar_classification", "")),
-            "consequence_gene_symbol": normalize_text(row.get("consequence_gene_symbol", "")),
-        }
-
-        gene_symbol = normalize_gene_symbol(row.get("consequence_gene_symbol", ""))
-        disease_labels = split_multi_delim(row.get("phenotype_combined", ""))
-        phenotype_groups = split_multi_delim(row.get("PhenotypeIDS", ""))
-        hpo_terms = [normalize_hpo_id(ph_term) for ph_term in phenotype_groups]
-        hpo_terms = [ph_term for ph_term in hpo_terms if ph_term]
-
-        valid_disease_terms = []
-        for disease_term in disease_labels:
-            disease_term = normalize_text(disease_term)
-            if not disease_term or disease_term in PLACEHOLDER_VALUES or disease_term.lower() in {
-                "not provided",
-                "not applicable",
-                "not specified",
-            }:
-                continue
-            valid_disease_terms.append(disease_term)
-            variant_disease_rels.add((variant_id, disease_term))
-            if gene_symbol:
-                gene_disease_rels.add((gene_symbol, disease_term))
-
-        for ph_term in hpo_terms:
-            variant_phenotype_rels.add((variant_id, ph_term))
-            if gene_symbol:
-                gene_phenotype_rels.add((gene_symbol, ph_term))
-            for disease_term in valid_disease_terms:
-                phenotype_disease_rels.add((ph_term, disease_term))
-
-        if gene_symbol:
-            gene_variant_rels.add((gene_symbol, variant_id))
-
-    payload = (
-        variant_nodes,
-        variant_phenotype_rels,
-        variant_disease_rels,
-        gene_variant_rels,
-        gene_disease_rels,
-        gene_phenotype_rels,
-        phenotype_disease_rels,
-    )
-    save_pickle_cache(VARIANT_CACHE_PATH, payload)
-    LOGGER.info(
-        "variant nodes=%s, variant-phenotype=%s, variant-disease=%s, gene-variant=%s",
-        len(variant_nodes),
-        len(variant_phenotype_rels),
-        len(variant_disease_rels),
-        len(gene_variant_rels),
-    )
-    return payload
-
-
-
-VARIANT_READ_CHUNKSIZE = 250000
+VARIANT_READ_CHUNKSIZE = 50000
 VARIANT_USECOLS = [
     'variant_name',
     'consequence_transcript',
@@ -285,29 +180,19 @@ def pick_value(row, idx_map, *keys, default='') -> str:
     return default
 
 
-def build_variant_name_from_row(row, idx_map, fallback_index: int) -> str:
-    parts = [
-        normalize_text(pick_value(row, idx_map, 'consequence_transcript')),
-        normalize_text(pick_value(row, idx_map, 'consequence_hgvs_c')),
-        normalize_text(pick_value(row, idx_map, 'consequence_hgvs_p')),
-    ]
-    parts = [p for p in parts if p]
-    if parts:
-        return ':'.join(parts)
-
-    chr_val = normalize_text(pick_value(row, idx_map, 'chr'))
-    pos_val = normalize_text(pick_value(row, idx_map, 'pos'))
-    ref_val = normalize_text(pick_value(row, idx_map, 'ref'))
-    alt_val = normalize_text(pick_value(row, idx_map, 'alt'))
-    if chr_val and pos_val and ref_val and alt_val:
-        return f'variant:{chr_val}:{pos_val}:{ref_val}>{alt_val}'
-    return f'variant_{fallback_index}'
+def build_variant_name_from_row(row, idx_map, fallback_index):
+    return variant_name({k: pick_value(row, idx_map, k) for k in idx_map})
 
 
 def load_variant_data():
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     LOGGER.info('loading variant data: %s', VARIANT_CSV_FILE_PATH)
     header_df = pd.read_csv(VARIANT_CSV_FILE_PATH, sep='	', dtype=str, keep_default_na=False, encoding='utf-8', nrows=0)
     available_cols = set(header_df.columns)
+    if not {'source', 'Source'} & available_cols:
+        raise ValueError('Integrated variants require a source column')
+    if not {'chr', 'pos', 'ref', 'alt'}.issubset(available_cols):
+        raise ValueError("Integrated variants require chr, pos, ref and alt columns")
     usecols = [col for col in VARIANT_USECOLS if col in available_cols]
     chunk_iter = pd.read_csv(
         VARIANT_CSV_FILE_PATH,
@@ -345,7 +230,7 @@ def load_variant_data():
             if not variant_id:
                 continue
 
-            variant_nodes[variant_id] = {
+            properties = {
                 'Source': normalize_text(pick_value(row, idx_map, source_key)),
                 'chr': normalize_text(pick_value(row, idx_map, 'chr')),
                 'pos': normalize_text(pick_value(row, idx_map, 'pos')),
@@ -365,9 +250,15 @@ def load_variant_data():
                 'consequence_gene_symbol': normalize_text(pick_value(row, idx_map, 'consequence_gene_symbol')),
             }
 
+            normalized = coordinates(properties)
+            if normalized:
+                properties.update(normalized)
+            variant_nodes[variant_id] = merge_annotations(variant_nodes.get(variant_id), properties)
+
             gene_symbol = normalize_gene_symbol(pick_value(row, idx_map, 'consequence_gene_symbol'))
             disease_labels = split_pipe(pick_value(row, idx_map, 'phenotype_combined'))
-            phenotype_groups = split_pipe_comma(pick_value(row, idx_map, 'PhenotypeIDS'))
+            disease_labels += [prefix.upper().replace('ORPHANET', 'ORPHA') + ':' + code for prefix, code in re.findall(r'(ORPHA(?:NET)?|OMIM):([A-Za-z0-9]+)', pick_value(row, idx_map, 'PhenotypeIDS'), re.I)]
+            phenotype_groups = split_multi_delim(pick_value(row, idx_map, 'PhenotypeIDS'))
             hpo_terms = [normalize_hpo_id(ph_term) for ph_term in phenotype_groups]
             hpo_terms = [ph_term for ph_term in hpo_terms if ph_term]
 
@@ -432,6 +323,7 @@ def main() -> None:
         {
             "variant_name:ID": vid,
             "Source": normalize_text(props.get("Source", "")),
+            "annotations": props.get("annotations", "[]"),
             "chr": normalize_text(props.get("chr", "")),
             "pos": normalize_text(props.get("pos", "")),
             "ref": normalize_text(props.get("ref", "")),
@@ -461,7 +353,7 @@ def main() -> None:
         for vid, disease_term in sorted(variant_disease_rels)
     ]
     export_csv(OUT_DIR / "variants.csv", [
-        "variant_name:ID", "Source", "chr", "pos", "ref", "alt", "consequence_effect",
+        "variant_name:ID", "Source", "annotations", "chr", "pos", "ref", "alt", "consequence_effect",
         "consequence_protein_id", "dbsnp", "revel_score", "revel_prediction",
         "spliceai_max_score", "spliceai_max_prediction", "acmg_score", "acmg_criteria",
         "clinvar_classification", "consequence_gene_symbol"

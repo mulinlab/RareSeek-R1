@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from rareseek.legacy_paths import RAW, PROCESSED, INTEGRATION, integration_dir
+
+
 import csv
 import json
 import logging
@@ -7,9 +13,9 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 
-BASE_DIR = Path("..data/raw")
+BASE_DIR = RAW
 INPUT_DIR = BASE_DIR / "Orphapacket"
-OUTPUT_DIR = Path("../processed/Orphapacket")
+OUTPUT_DIR = PROCESSED / "Orphapacket"
 
 RARE_DISEASE_SUMMARY_PATH = OUTPUT_DIR / "rare_disease_data_combined.tsv"
 GENES_PATH = OUTPUT_DIR / "genes_extracted.tsv"
@@ -78,6 +84,8 @@ def write_delimited(path: Path, rows: Sequence[dict[str, Any]], fieldnames: Sequ
 
 def extract_orphapacket(data: dict[str, Any]) -> dict[str, Any] | None:
     orphapacket = data.get("Orphapacket")
+    if isinstance(orphapacket, dict) and not str(orphapacket.get('ORPHAcode', '')).strip():
+        raise ValueError('Orphapacket requires an ORPHAcode')
     return orphapacket if isinstance(orphapacket, dict) else None
 
 
@@ -109,8 +117,7 @@ def process_rare_disease_summary() -> None:
             data = load_json(json_path)
             orphapacket = extract_orphapacket(data)
             if not orphapacket:
-                LOGGER.warning("Skipping %s: missing Orphapacket block", json_path.name)
-                continue
+                raise ValueError(f"{json_path.name}: missing Orphapacket block")
 
             synonyms = [
                 item.get("Synonym", "")
@@ -134,6 +141,7 @@ def process_rare_disease_summary() -> None:
             )
         except Exception as exc:  # pragma: no cover - defensive logging
             LOGGER.error("Error processing %s: %s", json_path.name, exc)
+            raise
 
     write_delimited(
         RARE_DISEASE_SUMMARY_PATH,
@@ -153,8 +161,7 @@ def process_genes() -> None:
             data = load_json(json_path)
             orphapacket = extract_orphapacket(data)
             if not orphapacket:
-                LOGGER.warning("Skipping %s: missing Orphapacket block", json_path.name)
-                continue
+                raise ValueError(f"{json_path.name}: missing Orphapacket block")
 
             genes = orphapacket.get("Genes", [])
             if not isinstance(genes, list):
@@ -166,7 +173,7 @@ def process_genes() -> None:
             }
 
             gene_count = 0
-            for index, gene_info in enumerate(genes, start=1):
+            for gene_info in genes:
                 if not isinstance(gene_info, dict):
                     continue
 
@@ -175,6 +182,7 @@ def process_genes() -> None:
                     continue
 
                 gene_count += 1
+                index = gene_count
                 row[f"gene_Symbol{index}"] = gene.get("Symbol", "")
                 row[f"gene_Name{index}"] = gene.get("Name", "")
                 row[f"gene_ExternalReferences{index}"] = join_non_empty(
@@ -190,6 +198,7 @@ def process_genes() -> None:
             rows.append(row)
         except Exception as exc:  # pragma: no cover - defensive logging
             LOGGER.error("Error processing %s: %s", json_path.name, exc)
+            raise
 
     fieldnames = ["ORPHAcode", "Disease"]
     for index in range(1, max_gene_count + 1):
@@ -215,8 +224,7 @@ def process_parents() -> None:
             data = load_json(json_path)
             orphapacket = extract_orphapacket(data)
             if not orphapacket:
-                LOGGER.warning("Skipping %s: missing Orphapacket block", json_path.name)
-                continue
+                raise ValueError(f"{json_path.name}: missing Orphapacket block")
 
             parents = orphapacket.get("Parents", [])
             if not isinstance(parents, list):
@@ -233,18 +241,22 @@ def process_parents() -> None:
                     continue
 
                 parent_list = parent_info.get("Parent", [])
-                if not isinstance(parent_list, list) or not parent_list:
-                    continue
-
-                parent = parent_list[0] if isinstance(parent_list[0], dict) else {}
-                parent_count += 1
-                row[f"parent_ORPHAcode{parent_count}"] = normalise_orpha_code(parent.get("ORPHAcode", ""))
-                row[f"parent_Label{parent_count}"] = parent.get("Label", "")
+                if isinstance(parent_list, dict):
+                    parent_list = [parent_list]
+                if not isinstance(parent_list, list):
+                    raise ValueError("Parent must contain a list or object")
+                for parent in parent_list:
+                    if not isinstance(parent, dict) or not parent.get("ORPHAcode"):
+                        raise ValueError("Parent record requires ORPHAcode")
+                    parent_count += 1
+                    row[f"parent_ORPHAcode{parent_count}"] = normalise_orpha_code(parent["ORPHAcode"])
+                    row[f"parent_Label{parent_count}"] = parent.get("Label", "")
 
             max_parent_count = max(max_parent_count, parent_count)
             rows.append(row)
         except Exception as exc:  # pragma: no cover - defensive logging
             LOGGER.error("Error processing %s: %s", json_path.name, exc)
+            raise
 
     fieldnames = ["ORPHAcode", "Disease"]
     for index in range(1, max_parent_count + 1):
@@ -263,8 +275,7 @@ def process_phenotypes() -> None:
             data = load_json(json_path)
             orphapacket = extract_orphapacket(data)
             if not orphapacket:
-                LOGGER.warning("Skipping %s: missing Orphapacket block", json_path.name)
-                continue
+                raise ValueError(f"{json_path.name}: missing Orphapacket block")
 
             phenotypes = orphapacket.get("Phenotypes", [])
             if not isinstance(phenotypes, list):
@@ -283,6 +294,8 @@ def process_phenotypes() -> None:
                 phenotype = phenotype_info.get("Phenotype", {})
                 if not isinstance(phenotype, dict):
                     continue
+                if phenotype.get('excluded') is True or str(phenotype.get('qualifier', '')).upper() == 'NOT':
+                    continue
 
                 phenotype_count += 1
                 row[f"phenotype_HPOId{phenotype_count}"] = phenotype.get("HPOId", "")
@@ -293,6 +306,7 @@ def process_phenotypes() -> None:
             rows.append(row)
         except Exception as exc:  # pragma: no cover - defensive logging
             LOGGER.error("Error processing %s: %s", json_path.name, exc)
+            raise
 
     fieldnames = ["ORPHAcode", "Disease"]
     for index in range(1, max_phenotype_count + 1):
@@ -339,8 +353,7 @@ def process_average_age_of_onsets() -> None:
             data = load_json(json_path)
             orphapacket = extract_orphapacket(data)
             if not orphapacket:
-                LOGGER.warning("Skipping %s: missing Orphapacket block", json_path.name)
-                continue
+                raise ValueError(f"{json_path.name}: missing Orphapacket block")
 
             age_values = extract_sequence_values(orphapacket.get("AverageAgeOfOnsets"), "AverageAgeOfOnset")
             row: dict[str, Any] = {
@@ -353,6 +366,7 @@ def process_average_age_of_onsets() -> None:
             rows.append(row)
         except Exception as exc:  # pragma: no cover - defensive logging
             LOGGER.error("Error processing %s: %s", json_path.name, exc)
+            raise
 
     max_age_count = max(
         (len([key for key in row if key.startswith("AverageAgeOfOnset_value")]) for row in rows),
@@ -371,8 +385,7 @@ def process_inheritances() -> None:
             data = load_json(json_path)
             orphapacket = extract_orphapacket(data)
             if not orphapacket:
-                LOGGER.warning("Skipping %s: missing Orphapacket block", json_path.name)
-                continue
+                raise ValueError(f"{json_path.name}: missing Orphapacket block")
 
             type_of_inheritances = orphapacket.get("TypeOfInheritances", {})
             if isinstance(type_of_inheritances, dict):
@@ -392,6 +405,7 @@ def process_inheritances() -> None:
             rows.append(row)
         except Exception as exc:  # pragma: no cover - defensive logging
             LOGGER.error("Error processing %s: %s", json_path.name, exc)
+            raise
 
     max_inheritance_count = max(
         (len([key for key in row if key.startswith("TypeOfInheritance_value")]) for row in rows),
@@ -403,6 +417,8 @@ def process_inheritances() -> None:
 
 
 def main() -> None:
+    if not list(iter_json_files(INPUT_DIR)):
+        raise FileNotFoundError(f"No Orphapacket JSON files in {INPUT_DIR}")
     ensure_output_dir()
     process_rare_disease_summary()
     process_genes()

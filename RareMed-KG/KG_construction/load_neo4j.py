@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from rareseek.legacy_paths import RAW, PROCESSED, INTEGRATION, integration_dir
+
+
 import csv
 import gzip
 import json
@@ -14,12 +20,11 @@ import numpy as np
 import pandas as pd
 
 
-COMPLETE_DIR = Path("../processed")
+COMPLETE_DIR = PROCESSED
 ORPHA_DIR = COMPLETE_DIR / "Orphapacket"
 OMIM_HPO_DIR = COMPLETE_DIR / "HPO_OMIM"
 VARIANT_DIR = COMPLETE_DIR / "variant"
 OUT_DIR = COMPLETE_DIR / "neo4j_import"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 VARIANT_CACHE_PATH = VARIANT_DIR / "cache" / "variant_restructured.pkl.gz"
 
@@ -67,7 +72,8 @@ def normalize_hpo_id(v) -> str:
     text = normalize_text(v)
     if not text:
         return ""
-    match = re.search(r"(HP:\d{7})", text.upper())
+    text = re.sub(r'^(?:Human_Phenotype_Ontology:|HPO:)', '', text, flags=re.I)
+    match = re.fullmatch(r"(HP:\d{7})", text.upper())
     if match:
         return match.group(1)
     if re.fullmatch(r"HP:\d{7}", text.upper()):
@@ -79,7 +85,7 @@ def normalize_reference_id(value) -> str:
     text = normalize_text(value)
     if not text:
         return ""
-    match = re.search(r"(?i)\b(ORPHA|ORPHANET|OMIM)\s*:\s*([A-Za-z0-9]+)", text)
+    match = re.fullmatch(r"(?i)(ORPHA|ORPHANET|OMIM)\s*:\s*([A-Za-z0-9]+)", text)
     if not match:
         return text
     prefix = match.group(1).upper()
@@ -135,6 +141,11 @@ def export_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[dict]):
     LOGGER.info("exported %s", path)
 
 
+def column_indices(row, prefix):
+    return sorted(int(str(k)[len(prefix):]) for k in row.index
+                  if str(k).startswith(prefix) and str(k)[len(prefix):].isdigit())
+
+
 def load_orphapacket_master() -> List[dict]:
     LOGGER.info("loading Orphapacket master from %s", ORPHA_DIR)
     disease_df = read_tsv(ORPHA_DIR / "rare_disease_data_combined.tsv")
@@ -156,7 +167,7 @@ def load_orphapacket_master() -> List[dict]:
             extra = extra.copy()
             if "Disease" in extra.columns:
                 extra = extra.drop(columns=["Disease"])
-            merged_df = pd.merge(merged_df, extra, on="ORPHAcode", how="left")
+            merged_df = pd.merge(merged_df, extra, on="ORPHAcode", how="left", validate="one_to_one")
 
     merged_df = merged_df.fillna("")
     records: List[dict] = []
@@ -168,17 +179,17 @@ def load_orphapacket_master() -> List[dict]:
         disease_name = normalize_text(row.get("Label")) or normalize_text(row.get("Label_x")) or normalize_text(row.get("Label_y")) or f"Unknown_ORPHA_{row.get('ORPHAcode')}"
         average_age = [
             normalize_text(row.get(f"AverageAgeOfOnset_value{i}", ""))
-            for i in range(1, 7)
+            for i in column_indices(row, "AverageAgeOfOnset_value")
             if is_valid_value(row.get(f"AverageAgeOfOnset_value{i}"))
         ]
         inheritance_types = [
             normalize_text(row.get(f"TypeOfInheritance_value{i}", ""))
-            for i in range(1, 7)
+            for i in column_indices(row, "TypeOfInheritance_value")
             if is_valid_value(row.get(f"TypeOfInheritance_value{i}"))
         ]
 
         phenotypes = []
-        for i in range(1, 189):
+        for i in column_indices(row, "phenotype_HPOId"):
             key = f"phenotype_HPOId{i}"
             if key in row and is_valid_value(row.get(key)):
                 ph_id = normalize_hpo_id(row.get(key))
@@ -192,7 +203,7 @@ def load_orphapacket_master() -> List[dict]:
                     )
 
         genes = []
-        for i in range(1, 109):
+        for i in column_indices(row, "gene_Symbol"):
             key = f"gene_Symbol{i}"
             if key in row and is_valid_value(row.get(key)):
                 symbol = normalize_gene_symbol(row.get(key))
@@ -207,7 +218,7 @@ def load_orphapacket_master() -> List[dict]:
                     )
 
         parents = []
-        for i in range(1, 31):
+        for i in column_indices(row, "parent_ORPHAcode"):
             key = f"parent_ORPHAcode{i}"
             if key in row and is_valid_value(row.get(key)):
                 pid = normalize_orpha_code(row.get(key))
@@ -235,7 +246,7 @@ def load_orphapacket_master() -> List[dict]:
 
 
 def load_disease_gene_supplement() -> List[dict]:
-    path = COMPLETE_DIR / 'data' / 'phenotype_to_genes_20210413.txt'
+    path = RAW / 'phenotype_to_genes_20210413.txt'
     LOGGER.info("loading disease-gene supplement: %s", path)
     column_names = [
         "HPO-id",
@@ -297,7 +308,7 @@ def load_orphapacket_gene_relations() -> Tuple[OrderedDict, set, set]:
             disease = normalize_orpha_code(row.get('ORPHAcode'))
             if not disease:
                 continue
-            for i in range(1, 109):
+            for i in column_indices(row, "gene_Symbol"):
                 symbol = normalize_gene_symbol(row.get(f'gene_Symbol{i}', ''))
                 if not symbol:
                     continue
@@ -322,7 +333,7 @@ def load_orphapacket_gene_relations() -> Tuple[OrderedDict, set, set]:
             disease = normalize_orpha_code(row.get('ORPHAcode'))
             if not disease:
                 continue
-            for i in range(1, 16):
+            for i in column_indices(row, "parent_ORPHAcode"):
                 parent = normalize_orpha_code(row.get(f'parent_ORPHAcode{i}', ''))
                 if parent:
                     disease_parent_rels.add((disease, parent))
@@ -342,7 +353,6 @@ def load_json_kg_relation_sets() -> Tuple[set, set, set, set]:
 
     candidate_files = [
         OMIM_HPO_DIR / "gene_disease_kg_extracted.csv",
-        OMIM_HPO_DIR / "gene_phenotype_kg_extracted.csv",
         OMIM_HPO_DIR / "hpo_phenotype_kg_extracted.csv",
         OMIM_HPO_DIR / "phenotype_to_genes_kg_extracted.csv",
     ]
@@ -359,7 +369,7 @@ def load_json_kg_relation_sets() -> Tuple[set, set, set, set]:
             if disease_id.startswith('DECIPHER:'):
                 continue
             gene_symbol = normalize_gene_symbol(
-                row.get("gene") or row.get("gene_symbol") or row.get("entrez-gene-symbol") or row.get("disease")
+                row.get("gene") or row.get("gene_symbol") or row.get("entrez-gene-symbol")
             )
             hpo_id = normalize_hpo_id(row.get("hpo_id") or row.get("HPOId") or row.get("hpo"))
             if gene_symbol:
@@ -398,7 +408,10 @@ def load_json_kg_disease_rows() -> List[dict]:
     rows = []
     seen = set()
     candidate_files = [
+        OMIM_HPO_DIR / "diseases_extracted.csv",
         OMIM_HPO_DIR / "gene_disease_kg_extracted.csv",
+        OMIM_HPO_DIR / "hpo_phenotype_kg_extracted.csv",
+        OMIM_HPO_DIR / "phenotype_to_genes_kg_extracted.csv",
     ]
     for path in candidate_files:
         if not path.exists():
@@ -409,14 +422,14 @@ def load_json_kg_disease_rows() -> List[dict]:
                 row.get("disease_id") or row.get("disease") or row.get("disease-id") or row.get("diseaseid")
             )
             disease_name = normalize_text(row.get("disease_name"))
-            if not disease_id or disease_id in seen:
+            if not disease_id or disease_id.startswith('DECIPHER:') or disease_id in seen:
                 continue
             seen.add(disease_id)
             rows.append(
                 {
                     "ORPHAcode:ID": disease_id,
                     "disease_name": disease_name or disease_id,
-                    "synonyms": "",
+                    "synonyms": normalize_text(row.get("aliases", "")),
                     "externalReferences": "",
                     "averageAgeOfOnset": "",
                     "inheritanceTypes": "",
@@ -430,7 +443,6 @@ def load_json_kg_phenotype_rows() -> Dict[str, dict]:
     out: Dict[str, dict] = {}
     candidate_files = [
         OMIM_HPO_DIR / "hpo_phenotype_kg_extracted.csv",
-        OMIM_HPO_DIR / "gene_phenotype_kg_extracted.csv",
         OMIM_HPO_DIR / "phenotype_to_genes_kg_extracted.csv",
     ]
     for path in candidate_files:
@@ -522,6 +534,7 @@ def load_clinvar_variant_edges(filename: str) -> List[dict]:
 
 
 def build_and_export():
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     disease_data = load_orphapacket_master()
     disease_gene_records = load_disease_gene_supplement()
     json_gene_disease_rels, json_gene_phenotype_rels, json_phenotype_disease_rels, json_gene_symbols = load_json_kg_relation_sets()
@@ -547,6 +560,8 @@ def build_and_export():
     gene_relations_disease = set()
     gene_phenotype_rels = set()
     phenotype_disease_rels = set()
+    phenotype_frequencies = {}
+    gene_association_types = {}
 
     for rec in disease_data:
         did = normalize_orpha_code(rec.get("ORPHAcode"))
@@ -559,9 +574,10 @@ def build_and_export():
             if ph_id:
                 phenotype_nodes[ph_id] = {
                     "Term": normalize_text(ph.get("Term", "")),
-                    "Frequency": normalize_text(ph.get("Frequency", "")),
+                    "Frequency": "",
                 }
                 disease_relations_dp.add((did, ph_id))
+                phenotype_frequencies[(did, ph_id)] = normalize_text(ph.get("Frequency", ""))
 
         for gene in rec.get("genes", []):
             gs = normalize_gene_symbol(gene.get("Symbol"))
@@ -577,6 +593,9 @@ def build_and_export():
                 }
                 disease_relations_dg.add((did, gs))
                 gene_relations_disease.add((gs, did))
+                association = normalize_text(gene.get('AssociationType', ''))
+                if association:
+                    gene_association_types.setdefault((did, gs), set()).add(association)
 
         for parent in rec.get("parents", []):
             pid = normalize_orpha_code(parent.get("ORPHAcode"))
@@ -685,18 +704,12 @@ def build_and_export():
             normalized_disease = normalize_reference_id(disease_term)
             if normalized_disease and normalized_disease.startswith("HP:"):
                 continue
-            gene_relations_disease.add((gs, disease_term))
+            gene_relations_disease.add((gs, normalize_reference_id(disease_term)))
 
     for gs, ph in clinvar_gene_phenotype_rels:
         if gs and ph:
             gene_phenotype_rels.add((gs, ph))
-    for ph, disease_term in clinvar_phenotype_disease_rels:
-        if ph and disease_term and normalize_hpo_id(ph) and normalize_reference_id(disease_term):
-            normalized_disease = normalize_reference_id(disease_term)
-            if normalized_disease and normalized_disease.startswith("HP:"):
-                continue
-            phenotype_disease_rels.add((ph, disease_term))
-
+    # Variant co-occurrence is deliberately excluded from direct disease annotations.
     for row in load_json_kg_disease_rows():
         did = row["ORPHAcode:ID"]
         if did not in disease_nodes:
@@ -708,8 +721,49 @@ def build_and_export():
                 "inheritanceTypes": row["inheritanceTypes"],
             }
 
+    for row in load_json_kg_disease_rows():
+        did = row['ORPHAcode:ID']
+        props = disease_nodes[did]
+        names = {props.get('disease_name', ''), row['disease_name']}
+        if props.get('disease_name', did) == did:
+            props['disease_name'] = row['disease_name']
+        aliases = set(str(props.get('synonyms', '')).split('|')) | set(row['synonyms'].split('|')) | names
+        props['synonyms'] = '|'.join(sorted(aliases - {'', did, 'Not provided', props.get('disease_name', '')}))
+
     for ph_id, props in load_json_kg_phenotype_rows().items():
-        phenotype_nodes.setdefault(ph_id, props)
+        existing = phenotype_nodes.setdefault(ph_id, props)
+        if not existing.get('Term'):
+            existing['Term'] = props.get('Term', '')
+
+    for gs, disease in gene_relations_disease:
+        if not disease.startswith(('HP:', 'DECIPHER:')):
+            disease_nodes.setdefault(disease, {'disease_name': disease})
+            gene_nodes.setdefault(gs, {})
+    for disease, ph in disease_relations_dp:
+        disease_nodes.setdefault(disease, {'disease_name': disease})
+        phenotype_nodes.setdefault(ph, {'Term': '', 'Frequency': ''})
+    for gs, ph in gene_phenotype_rels:
+        gene_nodes.setdefault(gs, {})
+        phenotype_nodes.setdefault(ph, {'Term': '', 'Frequency': ''})
+
+    # A text disease label is an alias only when the catalog resolves it uniquely.
+    canonical_names = {}
+    for did, props in disease_nodes.items():
+        if did.startswith(('ORPHA:', 'OMIM:')):
+            for name in [props.get('disease_name', ''), *str(props.get('synonyms', '')).split('|')]:
+                if name:
+                    canonical_names.setdefault(name.casefold().strip(), set()).add(did)
+    remap = {}
+    for did in disease_nodes:
+        candidates = canonical_names.get(did.casefold().strip(), set())
+        if ':' not in did and len(candidates) == 1:
+            remap[did] = next(iter(candidates))
+    for old, new in remap.items():
+        aliases = set(str(disease_nodes[new].get('synonyms', '')).split('|')) | {old}
+        disease_nodes[new]['synonyms'] = '|'.join(sorted(aliases - {''}))
+        del disease_nodes[old]
+    clinvar_variant_disease_rels = {(v, remap.get(normalize_reference_id(d), normalize_reference_id(d))) for v, d in clinvar_variant_disease_rels}
+    gene_relations_disease = {(g, remap.get(d, d)) for g, d in gene_relations_disease}
 
     vp_rows = [
         {":START_ID": vid, ":END_ID": ph, "TYPE": "IS_ASSOCIATED_WITH"}
@@ -718,9 +772,12 @@ def build_and_export():
     ]
     vd_rows = [
         {":START_ID": vid, ":END_ID": disease_term, "TYPE": "ASSOCIATED_WITH_DISEASE"}
-        for vid, disease_term in sorted(clinvar_variant_disease_rels)
+        for vid, raw_term in sorted(clinvar_variant_disease_rels)
+        for disease_term in [normalize_reference_id(raw_term)]
         if vid in variant_nodes_out and disease_term in disease_nodes
     ]
+    disease_relations_dp.update((normalize_reference_id(disease), ph) for ph, disease in phenotype_disease_rels)
+    disease_relations_dg.update((disease, gs) for gs, disease in gene_relations_disease if disease in disease_nodes)
     disease_rows = [
         {
             "ORPHAcode:ID": did,
@@ -750,7 +807,7 @@ def build_and_export():
             "Symbol:ID": gs,
             "Name": normalize_text(props.get("Name", "")),
             "ExternalReferences": normalize_text(props.get("ExternalReferences", "")),
-            "AssociationType": normalize_text(props.get("AssociationType", "")),
+            "AssociationType": "",
             "HPO-id": normalize_text(props.get("HPO-id", "")),
             "HPO-label": normalize_text(props.get("HPO-label", "")),
             "entrez-gene-id": normalize_text(props.get("entrez-gene-id", "")),
@@ -764,6 +821,7 @@ def build_and_export():
         {
             "variant_name:ID": vid,
             "Source": normalize_text(props.get("Source", "")),
+            "annotations": props.get("annotations", "[]"),
             "chr": normalize_text(props.get("chr", "")),
             "pos": normalize_text(props.get("pos", "")),
             "ref": normalize_text(props.get("ref", "")),
@@ -800,6 +858,7 @@ def build_and_export():
         [
             "variant_name:ID",
             "Source",
+            "annotations",
             "chr",
             "pos",
             "ref",
@@ -826,13 +885,13 @@ def build_and_export():
     )
     export_csv(
         OUT_DIR / "disease_phenotype.csv",
-        [":START_ID", ":END_ID", "TYPE"],
-        [{":START_ID": d, ":END_ID": ph, "TYPE": "HAS_PHENOTYPE"} for d, ph in sorted(disease_relations_dp) if d in disease_nodes and ph in phenotype_nodes],
+        [":START_ID", ":END_ID", "TYPE", "Frequency"],
+        [{":START_ID": d, ":END_ID": ph, "TYPE": "HAS_PHENOTYPE", "Frequency": phenotype_frequencies.get((d, ph), "")} for d, ph in sorted(disease_relations_dp) if d in disease_nodes and ph in phenotype_nodes],
     )
     export_csv(
         OUT_DIR / "disease_gene.csv",
-        [":START_ID", ":END_ID", "TYPE"],
-        [{":START_ID": d, ":END_ID": gs, "TYPE": "IS_ASSOCIATED_WITH"} for d, gs in sorted(disease_relations_dg) if d in disease_nodes and gs in gene_nodes],
+        [":START_ID", ":END_ID", "TYPE", "AssociationType"],
+        [{":START_ID": d, ":END_ID": gs, "TYPE": "IS_ASSOCIATED_WITH", "AssociationType": '|'.join(sorted(gene_association_types.get((d, gs), set())))} for d, gs in sorted(disease_relations_dg) if d in disease_nodes and gs in gene_nodes],
     )
     export_csv(
         OUT_DIR / "gene_variant.csv",
@@ -841,8 +900,8 @@ def build_and_export():
     )
     export_csv(
         OUT_DIR / "gene_disease.csv",
-        [":START_ID", ":END_ID", "TYPE"],
-        [{":START_ID": gs, ":END_ID": disease, "TYPE": "ASSOCIATED_WITH_DISEASE"} for gs, disease in sorted(gene_relations_disease) if gs in gene_nodes and disease in disease_nodes],
+        [":START_ID", ":END_ID", "TYPE", "AssociationType"],
+        [{":START_ID": gs, ":END_ID": disease, "TYPE": "ASSOCIATED_WITH_DISEASE", "AssociationType": '|'.join(sorted(gene_association_types.get((disease, gs), set())))} for gs, disease in sorted(gene_relations_disease) if gs in gene_nodes and disease in disease_nodes],
     )
     export_csv(
         OUT_DIR / "gene_phenotype.csv",
