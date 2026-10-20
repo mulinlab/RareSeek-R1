@@ -9,7 +9,7 @@
 
 The model is first instruction-tuned on the clinically grounded **RareMed-Corpus**, a large, multi-source dataset deeply integrated from medical textbooks, guidelines, biomedical literature, and real-world EHR (Electronic Health Record) narratives. It is subsequently fine-tuned on **RareMed-CoT**, a high-fidelity corpus designed to instill explicit, stepwise clinical reasoning that aligns with real-world diagnostic workflows.
 
-![Overview of RareSeek-R1](https://github.com/TaoMedAI/RareSeek-R1/blob/main/RareSeek-R1.png)
+![Overview of RareSeek-R1]([https://github.com/TaoMedAI/RareSeek-R1](https://github.com/mulinlab/RareSeek-R1)/blob/main/RareSeek-R1.png)
 *Figure 1: Overall framework and pipeline of RareSeek-R1.*
 
 ---
