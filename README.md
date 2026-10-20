@@ -85,16 +85,25 @@ The model weights of **RareSeek-R1** can be accessed upon request via [HuggingFa
 
 The following sections describe the available components. Standard inference uses EHR narratives directly; phenotype extraction supports phenotype-based comparisons and graph retrieval. Select the components appropriate to your experiment.
 
-Run commands from the repository root. Clinical inputs use UTF-8 JSONL with a unique `sample_id` and narrative in `context`; RAG also reads positive `hpo_list` entries and optional `variants`.
+Run commands from the repository root. The supplied input is `sample_data/sample.jsonl`, with one JSON record per line:
+
+| Field | Purpose |
+| :--- | :--- |
+| `id` | Case identifier; numeric and string IDs are supported |
+| `context` | Clinical narrative used for inference |
+| `disease` | Reference disease name; excluded from model prompts |
+| `orphacode` | Reference Orphanet identifier used for evaluation; excluded from model prompts |
+
+No field renaming is required. RAG additionally reads positive `hpo_list` entries and optional `variants`.
 
 ### 1. EHR Preprocessing
 
-To standardize multilingual clinical notes, non-English EHRs can be translated into English. Records with `language=en` bypass translation.
+To standardize multilingual clinical notes, non-English EHRs can be translated into English. Records with `language=en` bypass translation. The supplied sample is English and can be used directly. For other input languages, set `--language` accordingly (for example, `zh`).
 
 ```bash
 pip install -r requirements/services.txt
 export DEEPSEEK_API_KEY="YOUR_KEY"
-python rare_disease_ehr_translator.py --input data/private/cases_raw.jsonl --output data/private/cases.jsonl
+python rare_disease_ehr_translator.py --input sample_data/sample.jsonl --output outputs/preprocessing/sample_en.jsonl --language en
 ```
 
 Translation and HPO extraction use their configured backend; only send records authorized for that destination.
@@ -132,27 +141,35 @@ We benchmarked against [PhenoTagger](https://github.com/ncbi-nlp/PhenoTagger) an
 4. **Run the Extraction Client** in another terminal:
 
    ```bash
-   python llm_hpo_api_client.py --input data/private/cases.jsonl --output data/private/cases_hpo.jsonl
+   python llm_hpo_api_client.py --input sample_data/sample.jsonl --output outputs/preprocessing/sample_hpo.jsonl
    ```
 
-The output retains extraction details and stores positive mapped HPO IDs in `hpo_list`.
+The command writes `outputs/preprocessing/sample_hpo.jsonl`, retaining extraction details and positive mapped HPO IDs in `hpo_list`.
 
-### 3. Model Inference
+### 3. Model Inference (Standard)
 
 We use `vLLM` to accelerate standard inference. Clinical records and local weights can be supplied directly; phenotype extraction, reference labels and a knowledge graph are not prerequisites.
 
 **Python Inference:**
 
 ```bash
-python inference.py --input data/private/cases.jsonl --model models/RareSeek-R1 --output outputs/standard
+python inference.py --input sample_data/sample.jsonl --model models/RareSeek-R1 --output outputs/standard
 ```
 
 Predictions are saved to `outputs/standard/predictions.jsonl`. Add `--tensor-parallel-size 4` for four-GPU inference.
 
+**Model Service (via Slurm):**
+
+```bash
+sbatch inference/inference.sh
+```
+
+The service uses four GPUs on node `gpu3`, partition `llm`, and listens on port `8000`. Adjust the node and partition for your cluster. If running the HPO service on the same machine, use a separate port for one service.
+
 **Batch Inference (via Slurm):**
 
 ```bash
-sbatch inference/inference.sh --input data/private/cases.jsonl --model models/RareSeek-R1 --output outputs/standard --tensor-parallel-size 4
+sbatch inference/batch.sh --input sample_data/sample.jsonl --model models/RareSeek-R1 --output outputs/standard --tensor-parallel-size 4
 ```
 
 ### 4. RareMedRAG
@@ -182,9 +199,12 @@ python RareMed-KG/integration_clinvar_hgmd/acquire_clinvar.py
 python RareMed-KG/integration_clinvar_hgmd/clinvar_annotate.py
 ```
 
-For HGMD, additionally run `format_hgmd.py`, `map_hgmd_coords.py` and `process_hgmd_annotation.py` from the same directory. Then combine sources:
+For licensed HGMD data, continue with:
 
 ```bash
+python RareMed-KG/integration_clinvar_hgmd/format_hgmd.py
+python RareMed-KG/integration_clinvar_hgmd/map_hgmd_coords.py
+python RareMed-KG/integration_clinvar_hgmd/process_hgmd_annotation.py
 python RareMed-KG/integration_clinvar_hgmd/reconcile_databases.py --sources clinvar-hgmd
 python RareMed-KG/integration_clinvar_hgmd/unify_variants.py
 ```
@@ -210,7 +230,7 @@ This produces `graph.json`, `hierarchy.json` and `HPO_phenotype.json` in `data/p
 Supply clinical records containing positive HPO IDs and candidate variants:
 
 ```bash
-python RareMedRAG.py --input data/private/cases_hpo.jsonl --output outputs/rag/raw_predictions.jsonl --model models/RareSeek-R1 --revision YOUR_WEIGHT_VERSION --ic-source data/private/HPO_phenotype.json --tensor-parallel-size 4
+python RareMedRAG.py --input outputs/preprocessing/sample_hpo.jsonl --output outputs/rag/raw_predictions.jsonl --model models/RareSeek-R1 --revision YOUR_WEIGHT_VERSION --ic-source data/private/HPO_phenotype.json --tensor-parallel-size 4
 ```
 
 All input variants and their unique genes are queried. The model receives up to **300 paths**, prioritizing **variant paths**, then **gene paths**, then **phenotype paths ranked by descending mean IC**. IC is computed as `−ln(n/N)` without smoothing.
@@ -241,12 +261,12 @@ For standard inference, replace the input path with `outputs/standard/prediction
 
 Evaluation supports both **Exact Evaluation** and **Hierarchical Evaluation**.
 
-- **Reference format:** `data/private/gold.jsonl`, with `sample_id` and a `true_label` list of ORPHA/OMIM codes for each case.
+- **Reference labels:** Use `sample_data/sample.jsonl`; the evaluator reads `id` and `orphacode`. Separate reference files with `sample_id` and a `true_label` list are also supported.
 - **Notebook:** Open `evaluation.ipynb` and set the input paths.
 - **Command line:**
 
   ```bash
-  python scripts/evaluate.py --gold data/private/gold.jsonl --predictions outputs/rag/predictions.jsonl --hierarchy data/private/hierarchy.json --output outputs/rag/metrics.json
+  python scripts/evaluate.py --gold sample_data/sample.jsonl --predictions outputs/rag/predictions.jsonl --hierarchy data/private/hierarchy.json --output outputs/rag/metrics.json
   ```
 
 Both metrics use the full reference cohort, including missing and empty predictions. Hierarchical matching includes direct parents, children and grandchildren for ORPHA labels. To use the supplied `Classifications of rare diseases.json`, run:
